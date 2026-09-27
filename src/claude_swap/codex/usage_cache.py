@@ -60,6 +60,14 @@ class CodexUsageCache:
     def identities(self, slots: list[CodexSlot]) -> dict[str, tuple[str, str]]:
         return {s.number: self.identity_for(s) for s in slots}
 
+    def clear_failures(self, slot: CodexSlot) -> None:
+        """Forget a slot's failure/backoff state after its credential was replaced.
+
+        The failures belonged to the old token; without this a re-login stays
+        stuck on the old "http 401" until the backoff runs out.
+        """
+        self._usage.clear_dead_token([slot.number], self.identities([slot]))
+
     def entries(self, slots: list[CodexSlot]) -> dict[str, UsageEntry]:
         """Cached read model for these slots. Never touches the network."""
         return self._usage.entries(self.identities(slots))

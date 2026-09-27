@@ -288,6 +288,7 @@ class CodexSwitcher:
                     auth_mode="apikey" if ident.is_api_key else "chatgpt",
                 )
                 self._store.write_snapshot(ident.account_key, payload)
+                self._cache.clear_failures(slot)
                 self._store.set_active(ident.account_key)
                 if normalized:
                     self._store.set_alias(ident.account_key, normalized)

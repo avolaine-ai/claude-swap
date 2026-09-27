@@ -463,3 +463,31 @@ def test_a_failed_codex_login_puts_the_previous_login_back(monkeypatch, codex_ho
     assert exc.value.code == 1
     assert json.loads((codex_home / "auth.json").read_text()) == live_a
     assert list(codex_home.glob("auth.json.cswap-login-*")) == []
+
+
+def test_a_re_login_lifts_the_old_tokens_backoff(monkeypatch, codex_home: Path):
+    """The failures belonged to the revoked token. Without clearing them, a
+    fresh login keeps showing "http 401" until the backoff runs out."""
+    import time
+
+    from claude_swap.codex.switcher import CodexSwitcher
+    from claude_swap.usage_store import FetchRecord
+
+    _seed_one()
+    switcher = CodexSwitcher()
+    slot = switcher._store.slots()[0]
+    identities = switcher._cache.identities([slot])
+    usage = switcher._cache._usage
+    for _ in range(3):
+        claims = usage.reserve([slot.number], identities, respect_plans=False)
+        usage.record({slot.number: FetchRecord(error="http 401")}, identities, claims=claims)
+    assert usage.entries(identities)[slot.number].in_backoff(time.time())
+
+    (codex_home / "auth.json").write_text(
+        json.dumps(make_auth_json(account_id=ACCT_A, user_id=USER_A, email="a@example.com"))
+    )
+    CodexSwitcher().add_account()
+
+    entry = usage.entries(identities)[slot.number]
+    assert not entry.in_backoff(time.time())
+    assert entry.last_error is None
