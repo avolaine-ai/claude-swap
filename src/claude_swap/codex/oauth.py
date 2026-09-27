@@ -63,7 +63,9 @@ EXPIRY_MARGIN_S = 120.0
 #: login, and retrying only wastes requests. Anything not listed here stays
 #: transient — a misclassified transient costs one retry, a misclassified
 #: permanent quarantines a live account.
-PERMANENT_ERRORS = frozenset({"invalid_grant", "invalid_client", "token_expired"})
+PERMANENT_ERRORS = frozenset(
+    {"invalid_grant", "invalid_client", "token_expired", "refresh_token_invalidated"}
+)
 
 
 @dataclass(frozen=True)

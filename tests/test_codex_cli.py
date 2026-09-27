@@ -227,6 +227,9 @@ def test_codex_login_resolves_the_real_binary_not_a_shell_function(
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
         seen["shell"] = kwargs.get("shell", False)
+        (codex_home / "auth.json").write_text(
+            json.dumps(make_auth_json(account_id=ACCT_A, user_id=USER_A))
+        )
 
         class R:
             returncode = 0
@@ -235,9 +238,6 @@ def test_codex_login_resolves_the_real_binary_not_a_shell_function(
 
     monkeypatch.setattr("claude_swap.cli_codex.shutil.which", lambda n: "/usr/local/bin/codex")
     monkeypatch.setattr("claude_swap.cli_codex.subprocess.run", fake_run)
-    (codex_home / "auth.json").write_text(
-        json.dumps(make_auth_json(account_id=ACCT_A, user_id=USER_A))
-    )
 
     _run(monkeypatch, ["codex", "login"])
 
@@ -251,6 +251,9 @@ def test_codex_login_forwards_device_auth(monkeypatch, codex_home: Path):
 
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
+        (codex_home / "auth.json").write_text(
+            json.dumps(make_auth_json(account_id=ACCT_A, user_id=USER_A))
+        )
 
         class R:
             returncode = 0
@@ -259,9 +262,6 @@ def test_codex_login_forwards_device_auth(monkeypatch, codex_home: Path):
 
     monkeypatch.setattr("claude_swap.cli_codex.shutil.which", lambda n: "/usr/local/bin/codex")
     monkeypatch.setattr("claude_swap.cli_codex.subprocess.run", fake_run)
-    (codex_home / "auth.json").write_text(
-        json.dumps(make_auth_json(account_id=ACCT_A, user_id=USER_A))
-    )
 
     _run(monkeypatch, ["codex", "login", "--device-auth"])
 
@@ -407,3 +407,59 @@ def test_the_codex_help_documents_the_autoswitch_settings(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "autoswitch.codexThreshold" in out
     assert "autoswitch.codexEnabled" in out
+
+
+ACCT_B, USER_B = "acct-b", "user-b"
+KEY_B = account_key(USER_B, ACCT_B)
+
+
+def test_codex_login_hides_the_previous_login_from_codex(monkeypatch, codex_home: Path):
+    """`codex login` revokes the tokens it finds in auth.json. Those are the
+    previous account's stored snapshot too, so they must not be there."""
+    store = _seed_one()
+    live_a = make_auth_json(account_id=ACCT_A, user_id=USER_A, email="a@example.com")
+    (codex_home / "auth.json").write_text(json.dumps(live_a))
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["live_during_login"] = (codex_home / "auth.json").exists()
+        (codex_home / "auth.json").write_text(
+            json.dumps(make_auth_json(account_id=ACCT_B, user_id=USER_B, email="b@example.com"))
+        )
+
+        class R:
+            returncode = 0
+
+        return R()
+
+    monkeypatch.setattr("claude_swap.cli_codex.shutil.which", lambda n: "/usr/local/bin/codex")
+    monkeypatch.setattr("claude_swap.cli_codex.subprocess.run", fake_run)
+
+    _run(monkeypatch, ["codex", "login"])
+
+    assert seen["live_during_login"] is False
+    assert {s.account_key for s in CodexStore().slots()} == {KEY_A, KEY_B}
+    assert store.read_snapshot(KEY_A) == live_a
+    assert list(codex_home.glob("auth.json.cswap-login-*")) == []
+
+
+def test_a_failed_codex_login_puts_the_previous_login_back(monkeypatch, codex_home: Path):
+    _seed_one()
+    live_a = make_auth_json(account_id=ACCT_A, user_id=USER_A, email="a@example.com")
+    (codex_home / "auth.json").write_text(json.dumps(live_a))
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 1
+
+        return R()
+
+    monkeypatch.setattr("claude_swap.cli_codex.shutil.which", lambda n: "/usr/local/bin/codex")
+    monkeypatch.setattr("claude_swap.cli_codex.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["codex", "login"])
+
+    assert exc.value.code == 1
+    assert json.loads((codex_home / "auth.json").read_text()) == live_a
+    assert list(codex_home.glob("auth.json.cswap-login-*")) == []

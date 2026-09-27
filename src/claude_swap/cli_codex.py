@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 
+from claude_swap.codex import paths as cpaths
 from claude_swap.codex.registry_import import import_codex_auth_registry
 from claude_swap.codex.transfer import (
     export_codex_accounts,
@@ -167,10 +169,31 @@ def _do_login(args) -> None:
     # `codex` is a common setup (one that injects
     # --dangerously-bypass-approvals-and-sandbox is in the wild), and inheriting
     # it would run this login under flags cswap never chose.
-    result = subprocess.run(cmd, shell=False)
-    if result.returncode != 0:
+    #
+    # `codex login` revokes whatever tokens sit in the live auth.json before it
+    # signs in. Those tokens are also the stored snapshot of the account that
+    # was active, so logging in account B would silently kill account A
+    # ("refresh_token_invalidated"). Store the live login first, then move the
+    # file aside so codex finds nothing to revoke; put it back if login fails.
+    switcher = CodexSwitcher()
+    with switcher._lock():
+        switcher._capture_live()
+    live = cpaths.get_live_auth_path()
+    parked = live.with_name(f"{live.name}.cswap-login-{os.getpid()}")
+    if live.exists():
+        os.replace(live, parked)
+    try:
+        result = subprocess.run(cmd, shell=False)
+    except BaseException:
+        if parked.exists() and not live.exists():
+            os.replace(parked, live)
+        raise
+    if result.returncode != 0 or not live.exists():
+        if parked.exists():
+            os.replace(parked, live)
         error("codex login did not complete.")
-        sys.exit(result.returncode)
+        sys.exit(result.returncode or 1)
+    parked.unlink(missing_ok=True)
 
     slot = CodexSwitcher().add_account(alias=args.alias or "")
     print(f"Added Codex account {slot.number}: {slot.display_label}")
